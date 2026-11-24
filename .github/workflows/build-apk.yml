@@ -16,6 +16,20 @@ jobs:
             app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
           grep -n "P2P_PASS =" app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
 
+      # Modo de teste sem carro: ativa-se abrindo a app com "--ez desk true" via ADB
+      - name: Ativar modo de teste (desk mode)
+        run: |
+          perl -0pi -e 's/(private fun handleIntent\(intent: android\.content\.Intent\?\) \{\n)/$1        if (intent?.getBooleanExtra("desk", false) == true) {\n            bridge.deskMode = true\n            appendLog("DESK MODE: teste sem carro ligado")\n        }\n/' \
+            app/src/main/java/com/ezabi/wirelessaabridge/ui/MainActivity.kt
+          grep -n "DESK MODE" app/src/main/java/com/ezabi/wirelessaabridge/ui/MainActivity.kt
+
+      # Android 11+ esconde o endereço MAC (BSSID) a apps com targetSdk 30;
+      # com 29 a app consegue ler o BSSID real da rede Wi-Fi Direct
+      - name: Corrigir leitura do BSSID (targetSdk 29)
+        run: |
+          sed -i 's/targetSdk = 30/targetSdk = 29/' app/build.gradle.kts
+          grep -n "targetSdk" app/build.gradle.kts
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
