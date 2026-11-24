@@ -1,0 +1,34 @@
+name: Compilar APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # >>> MUDA AQUI a palavra-passe da rede Wi-Fi do telemóvel ponte (8 a 63 caracteres) <<<
+      - name: Definir palavra-passe Wi-Fi
+        run: |
+          sed -i 's/const val P2P_PASS = "aabridge"/const val P2P_PASS = "Diogo12345"/' \
+            app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
+          grep -n "P2P_PASS =" app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Compilar
+        run: gradle assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wireless-aa-bridge-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
