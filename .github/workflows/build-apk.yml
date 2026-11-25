@@ -108,6 +108,157 @@ jobs:
           sed -i 's/^\( *\)startSessionWatchdog()$/\1\/\/ startSessionWatchdog()  (desligado)/' $F
           grep -n "(desligado)" $F
 
+      # Replug USB virtual via Shizuku quando o Pixel esta pronto e o carro ja desistiu
+      - name: Adicionar replug USB via Shizuku
+        run: |
+          cat > /tmp/UsbReplug.kt <<'KTEOF'
+          package com.ezabi.wirelessaabridge.usb
+
+          import android.content.Context
+          import android.content.pm.PackageManager
+          import com.ezabi.wirelessaabridge.logging.LogManager
+          import rikka.shizuku.Shizuku
+
+          /**
+           * "Virtual replug" of the USB port through Shizuku (adb-level shell, no root).
+           * When the phone is on TCP but the car has already given up on the accessory,
+           * switching the USB functions off and back on makes the car see a fresh device
+           * and start the Android Auto (AOA) handshake again, now with the phone ready.
+           */
+          object UsbReplug {
+              private const val TAG = "UsbReplug"
+              private const val REQUEST_CODE = 4242
+              @Volatile private var lastMs = 0L
+              @Volatile private var listenerAdded = false
+
+              fun ready(): Boolean = try {
+                  Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+              } catch (e: Throwable) {
+                  false
+              }
+
+              fun requestPermissionIfNeeded(log: LogManager) {
+                  if (listenerAdded) return
+                  listenerAdded = true
+                  try {
+                      Shizuku.addBinderReceivedListenerSticky {
+                          try {
+                              if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+                                  log.i(TAG, "Shizuku ready (permission granted)")
+                              } else {
+                                  log.i(TAG, "Asking Shizuku permission")
+                                  Shizuku.requestPermission(REQUEST_CODE)
+                              }
+                          } catch (e: Throwable) {
+                              log.w(TAG, "Shizuku permission check failed: ${e.message}")
+                          }
+                      }
+                      if (!Shizuku.pingBinder()) log.w(TAG, "Shizuku is not running yet")
+                  } catch (e: Throwable) {
+                      log.w(TAG, "Shizuku unavailable: ${e.javaClass.simpleName}: ${e.message}")
+                  }
+              }
+
+              /** After a short wait, replug USB unless [carAlreadyThere] says the car side is live. */
+              fun replugLater(context: Context, carAlreadyThere: () -> Boolean) {
+                  val log = LogManager.getInstance(context)
+                  Thread({
+                      try {
+                          Thread.sleep(1500)
+                          if (carAlreadyThere()) {
+                              log.i(TAG, "Car side already live, no replug needed")
+                              return@Thread
+                          }
+                          val now = System.currentTimeMillis()
+                          if (now - lastMs < 20_000) {
+                              log.i(TAG, "Replug skipped (last one was less than 20 s ago)")
+                              return@Thread
+                          }
+                          if (!ready()) {
+                              log.w(TAG, "Cannot replug: Shizuku not running or permission missing")
+                              return@Thread
+                          }
+                          lastMs = now
+                          log.i(TAG, "Phone ready but no car: USB virtual replug")
+                          run(log, "svc usb setFunctions")
+                          Thread.sleep(2000)
+                          run(log, "svc usb setFunctions mtp")
+                          log.i(TAG, "USB virtual replug done, waiting for the car")
+                      } catch (e: Throwable) {
+                          log.e(TAG, "Replug failed: ${e.javaClass.simpleName}: ${e.message}")
+                      }
+                  }, "UsbReplug").apply { isDaemon = true; start() }
+              }
+
+              private fun run(log: LogManager, cmd: String) {
+                  val m = Shizuku::class.java.getDeclaredMethod(
+                      "newProcess",
+                      Array<String>::class.java,
+                      Array<String>::class.java,
+                      String::class.java
+                  )
+                  m.isAccessible = true
+                  val p = m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
+                  val out = p.inputStream.bufferedReader().readText()
+                  val err = p.errorStream.bufferedReader().readText()
+                  val rc = p.waitFor()
+                  log.i(TAG, "shell: $cmd -> rc=$rc ${(out + err).trim()}")
+              }
+          }
+          KTEOF
+          cat > /tmp/add_shizuku.py <<'PYEOF'
+          import sys
+          root = "app/src/main"
+          pkg = root + "/java/com/ezabi/wirelessaabridge"
+
+          def sub(path, old, new, count=1):
+              s = open(path).read()
+              assert old in s, f"not found in {path}: {old[:60]!r}"
+              s = s.replace(old, new, count)
+              open(path, "w").write(s)
+              print("patched", path)
+
+          # 1. new helper class
+          open(pkg + "/usb/UsbReplug.kt", "w").write(open(sys.argv[1]).read())
+          print("wrote UsbReplug.kt")
+
+          # 2. dependencies
+          sub("app/build.gradle.kts",
+              '    implementation("com.google.zxing:core:3.5.3")',
+              '    implementation("com.google.zxing:core:3.5.3")\n'
+              '    implementation("dev.rikka.shizuku:api:13.1.5")\n'
+              '    implementation("dev.rikka.shizuku:provider:13.1.5")')
+
+          # 3. Shizuku provider in manifest
+          sub(root + "/AndroidManifest.xml", "    </application>",
+              '        <provider\n'
+              '            android:name="rikka.shizuku.ShizukuProvider"\n'
+              '            android:authorities="${applicationId}.shizuku"\n'
+              '            android:multiprocess="false"\n'
+              '            android:enabled="true"\n'
+              '            android:exported="true"\n'
+              '            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />\n'
+              '    </application>')
+
+          # 4. ask Shizuku permission at app start
+          sub(pkg + "/ui/MainActivity.kt", "        bridge.setCarUsb(usbManager)\n",
+              "        bridge.setCarUsb(usbManager)\n"
+              "        com.ezabi.wirelessaabridge.usb.UsbReplug.requestPermissionIfNeeded(logManager)\n")
+
+          B = pkg + "/bridge/BridgeController.kt"
+          # 5. phone on TCP and no car -> virtual replug
+          sub(B, "            // probeIfNoCar(sock)  (desligado)\n",
+              "            com.ezabi.wirelessaabridge.usb.UsbReplug.replugLater(context) {\n"
+              "                carUsb?.isConnected() == true || relay.isRunning()\n"
+              "            }\n")
+          # 6. when the car comes back after the replug, do not ring the phone again
+          sub(B, 'ringing the paired phone (bridge is the head unit)")\n        hfp.connectToPairedAg()\n',
+              'ringing the paired phone (bridge is the head unit)")\n        if (pendingPhone == null) hfp.connectToPairedAg()\n')
+          PYEOF
+          python3 /tmp/add_shizuku.py /tmp/UsbReplug.kt
+          grep -n "UsbReplug\|pendingPhone == null" app/src/main/java/com/ezabi/wirelessaabridge/bridge/BridgeController.kt app/src/main/java/com/ezabi/wirelessaabridge/ui/MainActivity.kt
+          grep -n "shizuku" app/build.gradle.kts app/src/main/AndroidManifest.xml
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
