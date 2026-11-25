@@ -259,6 +259,14 @@ jobs:
           grep -n "UsbReplug\|pendingPhone == null" app/src/main/java/com/ezabi/wirelessaabridge/bridge/BridgeController.kt app/src/main/java/com/ezabi/wirelessaabridge/ui/MainActivity.kt
           grep -n "shizuku" app/build.gradle.kts app/src/main/AndroidManifest.xml
 
+      # Responder ao carro antes de ele desistir (~6 s apos o pedido), para ganhar
+      # mais ~15 s de paciencia do carro enquanto o Pixel chega
+      - name: Encurtar espera da resposta de versao ao carro
+        run: |
+          F=app/src/main/java/com/ezabi/wirelessaabridge/usb/CarUsbManager.kt
+          sed -i 's/private val SYNTHETIC_FALLBACK_MS = 60_000L/private val SYNTHETIC_FALLBACK_MS = 6_000L/' $F
+          grep -n "SYNTHETIC_FALLBACK_MS =" $F
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
