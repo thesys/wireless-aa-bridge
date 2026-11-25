@@ -78,6 +78,13 @@ jobs:
           python3 /tmp/fix_mac.py "22:67:0b:2d:8a:74"
           grep -n "FIXED_P2P_MAC\|via ip link" app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
 
+      # Filtro USB: aceitar qualquer versão enviada pelo rádio (não só "1.0")
+      - name: Alargar filtro de acessório USB
+        run: |
+          sed -i 's/^\( *\)version="1.0" \/>/\1\/>/' app/src/main/res/xml/accessory_filter.xml
+          sed -i 's#</resources>#    <usb-accessory />\n</resources>#' app/src/main/res/xml/accessory_filter.xml
+          cat app/src/main/res/xml/accessory_filter.xml
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
