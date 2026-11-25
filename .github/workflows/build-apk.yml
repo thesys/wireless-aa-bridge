@@ -85,6 +85,16 @@ jobs:
           sed -i 's#</resources>#    <usb-accessory />\n</resources>#' app/src/main/res/xml/accessory_filter.xml
           cat app/src/main/res/xml/accessory_filter.xml
 
+      # Ordem "telemovel primeiro, carro depois": nao enviar pedidos de versao falsos
+      # ao Pixel enquanto o carro nao esta ligado (sonda + heartbeat), para o Pixel
+      # ficar a espera do pedido verdadeiro do carro
+      - name: Desligar sonda e heartbeat sem carro
+        run: |
+          F=app/src/main/java/com/ezabi/wirelessaabridge/bridge/BridgeController.kt
+          sed -i 's/^\( *\)probeIfNoCar(sock)$/\1\/\/ probeIfNoCar(sock)  (desligado)/' $F
+          sed -i 's/^\( *\)startSessionWatchdog()$/\1\/\/ startSessionWatchdog()  (desligado)/' $F
+          grep -n "(desligado)" $F
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
