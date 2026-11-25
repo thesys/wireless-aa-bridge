@@ -12,7 +12,7 @@ jobs:
       # >>> MUDA AQUI a palavra-passe da rede Wi-Fi do telemóvel ponte (8 a 63 caracteres) <<<
       - name: Definir palavra-passe Wi-Fi
         run: |
-          sed -i 's/const val P2P_PASS = "aabridge"/const val P2P_PASS = "Diogo12345"/' \
+          sed -i 's/const val P2P_PASS = "aabridge"/const val P2P_PASS = "MudaEstaPalavra123"/' \
             app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
           grep -n "P2P_PASS =" app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
 
@@ -29,6 +29,54 @@ jobs:
         run: |
           sed -i 's/targetSdk = 30/targetSdk = 29/' app/build.gradle.kts
           grep -n "targetSdk" app/build.gradle.kts
+
+      # >>> MAC real da interface p2p0 do Redmi (de "adb shell ip link") <<<
+      - name: Corrigir BSSID (ler MAC por outros meios + valor fixo)
+        run: |
+          cat > /tmp/fix_mac.py <<'PYEOF'
+          import re, sys
+          p = "app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt"
+          s = open(p).read()
+          old = re.search(r"    private fun readInterfaceMac\(iface: String\): String\? = try \{\n.*?\n    \}\n", s, re.S)
+          assert old, "readInterfaceMac not found"
+          new = '''    private fun readInterfaceMac(iface: String): String? {
+                  val bad = "02:00:00:00:00:00"
+                  val macRe = Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}")
+                  try {
+                      val hw = NetworkInterface.getByName(iface)?.hardwareAddress
+                      if (hw != null) {
+                          val m = hw.joinToString(":") { "%02X".format(it) }
+                          if (m != bad) { log.i(TAG, "MAC $iface via NetworkInterface: $m"); return m }
+                      }
+                  } catch (e: Exception) { }
+                  try {
+                      val f = java.io.File("/sys/class/net/" + iface + "/address")
+                      val m = f.readText().trim().uppercase()
+                      if (macRe.matches(m) && m != bad) { log.i(TAG, "MAC $iface via sysfs: $m"); return m }
+                  } catch (e: Exception) { }
+                  try {
+                      val proc = ProcessBuilder("ip", "link", "show", iface).redirectErrorStream(true).start()
+                      val out = proc.inputStream.bufferedReader().readText()
+                      proc.waitFor()
+                      val m = Regex("link/ether ([0-9a-fA-F:]{17})").find(out)?.groupValues?.get(1)?.uppercase()
+                      if (m != null && m != bad) { log.i(TAG, "MAC $iface via ip link: $m"); return m }
+                  } catch (e: Exception) { }
+                  val fixed = FIXED_P2P_MAC.uppercase()
+                  if (iface == "p2p0" && macRe.matches(fixed)) {
+                      log.w(TAG, "MAC $iface: using fixed value $fixed")
+                      return fixed
+                  }
+                  log.w(TAG, "MAC $iface: could not read")
+                  return null
+              }
+          '''
+          s = s[:old.start()] + new + s[old.end():]
+          s = s.replace('        const val P2P_PASS = ', '        const val FIXED_P2P_MAC = "' + sys.argv[1] + '"\n        const val P2P_PASS = ', 1)
+          open(p, "w").write(s)
+          print("patched readInterfaceMac, FIXED_P2P_MAC =", sys.argv[1])
+          PYEOF
+          python3 /tmp/fix_mac.py "22:67:0b:2d:8a:74"
+          grep -n "FIXED_P2P_MAC\|via ip link" app/src/main/java/com/ezabi/wirelessaabridge/wifi/HotspotManager.kt
 
       - uses: actions/setup-java@v4
         with:
