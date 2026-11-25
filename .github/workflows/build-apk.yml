@@ -8,6 +8,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # O Redmi passa a "chamar" o Pixel por Bluetooth assim que o carro se liga
+      # (repoe a funcao retirada na v1.0.2) e deixa de ligar o Redmi ao Bluetooth do carro
+      - name: Repor chamada Bluetooth ao telemovel
+        run: |
+          git -c user.email=build@local -c user.name=build revert --no-commit 279958c
+          H=app/src/main/java/com/ezabi/wirelessaabridge/bluetooth/HfpHandsfreeServer.kt
+          B=app/src/main/java/com/ezabi/wirelessaabridge/bridge/BridgeController.kt
+          sed -i 's/if (name.contains("toyota", ignoreCase = true)) continue/if (name.contains("toyota", ignoreCase = true) || name.contains("LN01A", ignoreCase = true) || name.contains("opel", ignoreCase = true)) continue/' $H
+          sed -i 's/^\( *\)connectCarHandsfree()$/\1\/\/ connectCarHandsfree()  (desligado: Opel nao precisa)/' $B
+          grep -n "LN01A\|connectToPairedAg()\|(desligado: Opel" $H $B
 
       # >>> MUDA AQUI a palavra-passe da rede Wi-Fi do telemóvel ponte (8 a 63 caracteres) <<<
       - name: Definir palavra-passe Wi-Fi
